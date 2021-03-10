@@ -1,10 +1,6 @@
 name: Sanity check
 
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+on: push
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -39,7 +35,7 @@ jobs:
         black --check .
     - name: Run flake8
       run: flake8
-    - name: Run Mypy
+    - name: Run mypy
       run: mypy robomaster
     - name: Test with pytest
       run: |
