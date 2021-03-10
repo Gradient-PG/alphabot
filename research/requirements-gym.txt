@@ -1,0 +1,2 @@
+-e git+git://github.com/nplan/gym-line-follower@master#egg=gym-line-follower
+matplotlib~=3.3.4
