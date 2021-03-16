@@ -16,82 +16,161 @@ logging.getLogger("tensorflow").setLevel(logging.FATAL)
 log = logging.getLogger(__name__)
 
 
+class PolicyNetwork:
+    """Class representing Policy Network, containing two neural networks, one for each motor"""
+
+    def __init__(
+        self, input_shape: typing.Tuple, bias_mu: float, bias_sigma: float, learning_rate: float, checkpoint_path: str
+    ):
+
+        self.input_shape = input_shape
+        self.bias_mu = bias_mu
+        self.bias_sigma = bias_sigma
+        self.learning_rate = learning_rate
+        self.checkpoint_path = checkpoint_path
+        self.left_motor_network = self.create_single_network()
+        self.right_motor_network = self.create_single_network()
+        self.loss = self.create_policy_network_loss()
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+
+    def create_single_network(self) -> tf.keras.Model:
+        """
+        Create deep neural network for a single motor
+
+        :return: Neural network model
+        """
+        inputs = tf.keras.layers.Input(shape=self.input_shape)
+        hidden1 = tf.keras.layers.Dense(64, activation="relu", kernel_initializer=tf.keras.initializers.he_normal())(
+            inputs
+        )
+        hidden2 = tf.keras.layers.Dense(128, activation="relu", kernel_initializer=tf.keras.initializers.he_normal())(
+            hidden1
+        )
+
+        mu = tf.keras.layers.Dense(
+            1,
+            activation="linear",
+            kernel_initializer=tf.keras.initializers.Zeros(),
+            bias_initializer=tf.keras.initializers.Constant(self.bias_mu),
+        )(hidden2)
+
+        sigma = tf.keras.layers.Dense(
+            1,
+            activation="softplus",
+            kernel_initializer=tf.keras.initializers.Zeros(),
+            bias_initializer=tf.keras.initializers.Constant(self.bias_sigma),
+        )(hidden2)
+
+        model = tf.keras.Model(inputs=inputs, outputs=[mu, sigma])
+        return model
+
+    def create_policy_network_loss(self) -> typing.Callable:
+        """
+        Create custom policy loss
+
+        :return: Callable loss function
+        """
+
+        def policy_network_loss(
+            state: typing.List[float], action: typing.List[float], reward: float
+        ) -> typing.List[tf.Tensor]:
+            """
+            Return loss value for action taken at state
+
+            :param state: Current state of agent
+            :param action: Action performed by agent
+            :param reward: Reward for action performed at state
+            :return: Losses for left and right motor
+            """
+            losses = []
+            for index, motor_network in enumerate((self.left_motor_network, self.right_motor_network)):
+                nn_mu, nn_sigma = motor_network(state)
+
+                pdf_value = (
+                    tf.exp(-0.5 * ((action[index] - nn_mu) / nn_sigma) ** 2) * 1 / (nn_sigma * tf.sqrt(2 * np.pi))
+                )
+
+                log_probability = tf.math.log(pdf_value)
+
+                loss = -reward * log_probability
+                losses.append(loss)
+
+            return losses
+
+        return policy_network_loss
+
+    def apply_gradients(self, losses: typing.List[tf.Tensor], tape: tf.GradientTape) -> None:
+        """
+        Backpropagate the loss through networks
+
+        :param losses: Losses for current step
+        :param tape: Persistent gradient tape that recorded operations for differentiation
+        :return:
+        """
+        for loss, network in zip(losses, (self.left_motor_network, self.right_motor_network)):
+            grads = tape.gradient(loss, network.trainable_variables)
+            self.optimizer.apply_gradients(zip(grads, network.trainable_variables))
+
+    def save_weights(self) -> None:
+        """
+        Save weights for networks to checkpoint files
+
+        :return: None
+        """
+        self.left_motor_network.save(self.checkpoint_path + "_left.h5")
+        self.right_motor_network.save(self.checkpoint_path + "_right.h5")
+
+    def load_weights(self) -> None:
+        """
+        Load weights for networks from checkpoint files
+
+        :return: None
+        """
+        self.left_motor_network = tf.keras.models.load_model(self.checkpoint_path + "_left.h5")
+        self.right_motor_network = tf.keras.models.load_model(self.checkpoint_path + "_right.h5")
+
+    def __call__(self, state):
+        mu_left, sigma_left = self.left_motor_network(state)
+        mu_right, sigma_right = self.right_motor_network(state)
+        return (mu_left, sigma_left), (mu_right, sigma_right)
+
+
 class PolicyGradientAgent:
     """Class representing Policy Gradient agent"""
 
-    def __init__(self,
-                 env: LineFollowerEnv,
-                 bias_mu: float = 0.0,
-                 bias_sigma: float = 0.5,
-                 min_replay_buffer_len: int = 100,
-                 checkpoint_path: str = "weights/policy_gradient.h5",
-                 load_from_checkpoint: bool = False
-                 ):
+    def __init__(
+        self,
+        env: LineFollowerEnv,
+        bias_mu: float = 0.0,
+        bias_sigma: float = 0.5,
+        learning_rate: float = 0.001,
+        min_replay_buffer_len: int = 100,
+        checkpoint_path: str = "weights/policy_gradient",
+        load_from_checkpoint: bool = False,
+    ):
+
         self.env = env
-        self.bias_mu = bias_mu
-        self.bias_sigma = bias_sigma
         self.state_space = env.observation_space
         self.action_space = env.action_space
 
         self.replay_buffer: typing.Deque = deque(maxlen=50000)
         self.min_replay_buffer_len = min_replay_buffer_len
 
-        self.policy_network = self.create_policy_network()
-        self.policy_loss = self.create_policy_network_loss()
+        self.policy_network = PolicyNetwork(
+            self.state_space.shape, bias_mu, bias_sigma, learning_rate, checkpoint_path
+        )
         self.checkpoint_path = checkpoint_path
 
         if load_from_checkpoint:
-            self.q_network.load_weights(self.checkpoint_path)
+            self.policy_network.load_weights()
 
-    def create_policy_network(self) -> tf.keras.Model:
+    def train(self, episode_num: int = 1000) -> None:
         """
-        Create policy network
+        Train agent to perform in environment
 
-        :return: Policy network
+        :param episode_num: Number of training episodes
+        :return: None
         """
-        inputs = tf.keras.layers.Input(shape=(16,))
-        hidden1 = tf.keras.layers.Dense(64, activation="relu", kernel_initializer=tf.keras.initializers.he_normal())(inputs)
-        hidden2 = tf.keras.layers.Dense(128, activation="relu", kernel_initializer=tf.keras.initializers.he_normal())(hidden1)
-
-        mu = tf.keras.layers.Dense(1, activation="linear",
-                                   kernel_initializer=tf.keras.initializers.Zeros(),
-                                   bias_initializer=tf.keras.initializers.Constant(self.bias_mu))(hidden2)
-
-        sigma = tf.keras.layers.Dense(1, activation="softplus",
-                                      kernel_initializer=tf.keras.initializers.Zeros(),
-                                      bias_initializer=tf.keras.initializers.Constant(self.bias_sigma))(hidden2)
-
-        policy_network = tf.keras.Model(inputs=inputs, outputs=[mu, sigma])
-        return policy_network
-
-    def create_policy_network_loss(self) -> float:
-        """
-        Create custom policy loss
-
-        :return: Loss
-        """
-        def policy_network_loss(state, action, reward):
-            nn_mu, nn_sigma = self.policy_network(state)
-
-            # Obtain pdf of Gaussian distribution
-            pdf_value = tf.exp(-0.5 * ((action - nn_mu) / nn_sigma) ** 2) * 1 / (nn_sigma * tf.sqrt(2 * np.pi))
-
-            # Compute log probability
-            log_probability = tf.math.log(pdf_value + 1e-5)
-
-            # Compute weighted loss
-            loss = - reward * log_probability
-            return loss
-
-        return policy_network_loss
-
-    def train(self,
-              episode_num: int = 10000,
-              learning_rate: float = 0.001
-              ):
-
-        optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
-
         for episode in range(episode_num):
             total_reward = 0
             timestep = 0
@@ -102,45 +181,55 @@ class PolicyGradientAgent:
                 state = np.array(state)
                 state_reshaped = state.reshape([1, state.shape[0]])
 
-                # Obtain mu and sigma from network
-                mu, sigma = self.policy_network(state_reshaped)
+                (mu_left, sigma_left), (mu_right, sigma_right) = self.policy_network(state_reshaped)
 
-                # Draw action from normal distribution
-                action = tf.random.normal([2], mean=mu, stddev=sigma)
-                action = tf.squeeze(action)
+                action = self.take_action(mu_left, sigma_left, mu_right, sigma_right)
+
                 log.debug(f"Action taken at step {timestep}: {action}")
+                log.debug(f"left motor: ({mu_left}, {sigma_left})\t right motor: ({mu_right}, {sigma_right})")
 
-                # Compute reward
                 new_state, reward, finished, info = self.env.step(action)
 
-                # Update network weights
-                with tf.GradientTape() as tape:
-                    # Compute Gaussian loss
-                    loss_value = self.policy_loss(state_reshaped, action, reward)
-
-                    # Compute gradients
-                    grads = tape.gradient(loss_value, self.policy_network.trainable_variables)
-
-                    # Apply gradients to update network weights
-                    optimizer.apply_gradients(zip(grads, self.policy_network.trainable_variables))
+                with tf.GradientTape(persistent=True) as tape:
+                    losses = self.policy_network.loss(state_reshaped, action, reward)
+                    log.info(f"Loss: {losses}")
+                    self.policy_network.apply_gradients(losses, tape)
 
                 state = new_state
                 total_reward += reward
                 timestep += 1
 
                 if episode % 10 == 0:
-                    self.policy_network.save(self.checkpoint_path)
+                    self.policy_network.save_weights()
 
             log.info(f"Episode {episode} finished!\t Total reward: {total_reward:.2f}\t Timesteps: {timestep}")
 
+    def take_action(
+        self, mu_left: float, sigma_left: float, mu_right: float, sigma_right: float
+    ) -> typing.List[float]:
+
+        """
+        Sample action from normal distributions of left and right motor
+
+        :param mu_left: Mean for left motor
+        :param sigma_left: Standard deviation for left motor
+        :param mu_right: Mean for right motor
+        :param sigma_right: Standard deviation for right motor
+        :return: Action if form of list of two floats
+        """
+
+        action_left_motor = tf.random.normal([1], mean=mu_left, stddev=sigma_left).numpy().flatten()[0]
+        action_right_motor = tf.random.normal([1], mean=mu_right, stddev=sigma_right).numpy().flatten()[0]
+        return [action_left_motor, action_right_motor]
+
     def test(self, test_env: LineFollowerEnv) -> float:
         """
-        Test agent
+        Check how the agent performs in test environment
 
-        :param test_env:
-        :return:
+        :param test_env: Test environment for agent
+        :return: Total reward
         """
-        self.policy_network = tf.keras.models.load_model(self.checkpoint_path)
+        self.policy_network.load_weights()
         total_reward = 0
         timestep = 0
         finished = False
@@ -150,22 +239,21 @@ class PolicyGradientAgent:
             state = np.array(state)
             state_reshaped = state.reshape([1, state.shape[0]])
 
-            # Obtain mu and sigma from network
-            mu, sigma = self.policy_network(state_reshaped)
+            (mu_left, sigma_left), (mu_right, sigma_right) = self.policy_network(state_reshaped)
 
-            # Draw action from normal distribution
-            action = tf.random.normal([2], mean=mu, stddev=sigma)
-            action = tf.squeeze(action)
+            action = self.take_action(mu_left, sigma_left, mu_right, sigma_right)
+
             log.info(f"Action taken at step {timestep}: {action}")
+            log.info(f"left motor: ({mu_left}, {sigma_left})\t right motor: ({mu_right}, {sigma_right})")
 
-            # Compute reward
             new_state, reward, finished, info = test_env.step(action)
-
             state = new_state
             total_reward += reward
             timestep += 1
 
         log.info(f"Test finished!\t Total reward: {total_reward:.2f}\t Timesteps: {timestep}")
+        return total_reward
+
 
 if __name__ == "__main__":
     train_env = LineFollowerEnv(gui=False, max_time=30)
@@ -174,8 +262,7 @@ if __name__ == "__main__":
     log.info(f"Action space length: {train_env.action_space}")
 
     agent = PolicyGradientAgent(train_env)
-    # print(agent.policy_network.summary())
     agent.train()
 
-    #total_reward = agent.test_agent(test_env)
-    #log.info(f"Test total reward: {total_reward}")
+    test_env = LineFollowerEnv(gui=True, max_time=30)
+    agent.test(test_env)
