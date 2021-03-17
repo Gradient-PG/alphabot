@@ -4,6 +4,7 @@ import random
 from tensorflow.keras import layers
 import gym
 import gym_line_follower  # to register environment
+from gym_line_follower.envs.line_follower_env import LineFollowerEnv
 
 
 # Generates an index for random action
@@ -35,7 +36,7 @@ def observation_to_state(obs: tuple) -> int:
 
 
 def train(
-    env: gym_line_follower.envs.line_follower_env.LineFollowerEnv,
+    env: LineFollowerEnv,
     Q: list,
     episodes: int,
     alpha: float,

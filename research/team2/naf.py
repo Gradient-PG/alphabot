@@ -64,7 +64,7 @@ def build_models(env, window_length):
     return V_model, mu_model, L_model
 
 
-# Creating environment
+# Creating enviroment
 env = LineFollowerEnv(gui=False)
 nb_actions = env.action_space.shape[0]
 
