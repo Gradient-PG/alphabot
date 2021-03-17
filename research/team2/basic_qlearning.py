@@ -86,9 +86,9 @@ def train(
             print("Average reward: " + str(reward_sum / update_interval))
             reward_sum = 0
 
-    checkpoint_name += f"{episodes}"
+    checkpoint_name += f"_{episodes}"
 
-    with open("checkpoint_name", "wb") as file:
+    with open(checkpoint_name, "wb") as file:
         pickle.dump(Q, file)
 
 
