@@ -124,8 +124,8 @@ class DQAgent:
 
     def train_agent(
         self,
-        episode_num: int = 100,
-        epsilon: float = 0.9,
+        episode_num: int = 400,
+        epsilon: float = 1.0,
         min_epsilon: float = 0.01,
         epsilon_decay: float = 0.01,
         q_value_learning_rate: float = 0.7,
@@ -145,9 +145,12 @@ class DQAgent:
         :return: None
         """
         for episode in range(episode_num):
+            train_env = LineFollowerEnv(gui=False, max_time=20)
+            train_env.action_space = [(0.5, 0), (0, 0.5), (1, 0), (0, 1), (1, 1)]
+
             total_reward = 0
             finished = False
-            observation = self.train_env.reset()
+            observation = train_env.reset()
             timestep = 0
 
             while not finished:
@@ -160,9 +163,9 @@ class DQAgent:
                     observation_reshaped = observation.reshape([1, observation.shape[0]])
                     predicted = self.q_network.predict(observation_reshaped).flatten()
                     action = self.action_space[np.argmax(predicted)]
-                    log.info(f"Predictions: {predicted}\tbest action: {action}")
+                    log.debug(f"Predictions: {predicted}\tbest action: {action}")
 
-                new_observation, reward, finished, info = self.train_env.step(action)
+                new_observation, reward, finished, info = train_env.step(action)
                 self.replay_buffer.append([observation, action, reward, new_observation, finished])
                 log.debug(f"Episode {episode}, timestep {timestep}, reward: {reward}")
 
@@ -201,17 +204,20 @@ class DQAgent:
 
 
 if __name__ == "__main__":
-    train_env = LineFollowerEnv(gui=False, max_time=10)
-    train_env.action_space = [(0.5, 0), (0, 0.5), (1, 0), (0, 1), (1, 1)]
+    train_env = LineFollowerEnv(gui=False)
+    left_motor_speeds = np.linspace(0.0, 1.0, 7)
+    right_motor_speeds = np.linspace(0.0, 1.0, 7)
+    train_env.action_space = [action for action in product(left_motor_speeds, right_motor_speeds)]
 
     log.info(f"Observation space: {train_env.observation_space}")
     log.info(f"Action space length: {len(train_env.action_space)}")
 
-    test_env = LineFollowerEnv(gui=True, max_time=30)
-    test_env.action_space = [(0.5, 0), (0, 0.5), (1, 0), (0, 1), (1, 1)]
-
     agent = DQAgent(train_env)
     # agent.train_agent()
 
+    test_env = LineFollowerEnv(gui=True, max_time=30)
+    left_motor_speeds = np.linspace(0.0, 1.0, 7)
+    right_motor_speeds = np.linspace(0.0, 1.0, 7)
+    test_env.action_space = [action for action in product(left_motor_speeds, right_motor_speeds)]
     total_reward = agent.test_agent(test_env)
     log.info(f"Test total reward: {total_reward}")
