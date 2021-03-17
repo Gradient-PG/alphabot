@@ -13,11 +13,12 @@ if __name__ == "__main__":
     env.reset()
 
     # Set training parameters
-    number_of_episodes = 10000
+    number_of_episodes = 1000
     time_to_close_loop = 2000
     gamma = 0.9
-    alpha = 0.1
-    epsilon = 0.1
+    alpha = 0.3
+    start_epsilon = 1
+    min_epsilon = 0.05
 
     actions = [(0, 0), (1, 0), (1, 0.25), (1, 0.5), (1, 0.75), (1, 1), (0, 1), (0.25, 1), (0.5, 1), (0.75, 1), (1, 1)]
     states_x = [u / 100 for u in range(0, 31, 1)]
@@ -27,7 +28,15 @@ if __name__ == "__main__":
     logger.info(f"X space: {states_x}")
     logger.info(f"Y space: {states_y}")
 
-    q_table = np.zeros((len(actions), len(states_x), len(states_y)))
+    try:
+        q_table = np.load("data.npy")
+        epsilon = 0.1
+        load = True
+    except OSError:
+        q_table = np.zeros((len(actions), len(states_x), len(states_y)))
+        epsilon = 1.0
+        load = False
+
     logger.info(f"Q table: {q_table}")
 
     for episode in range(number_of_episodes):
@@ -37,15 +46,20 @@ if __name__ == "__main__":
         state_x, state_y = 0.0, 0.0
         reward_all = 0
         logger.info(f"episode number: {episode}")
+        if not load:
+            epsilon -= (start_epsilon - min_epsilon) / number_of_episodes
+
         while not episode_ended:
             timestep += 1
             if random.uniform(0, 1) < epsilon:
                 action_index = random.randrange(len(actions))
+                # logger.info(f"random")
             else:
                 action_index = q_table.argmax(axis=0)[states_x.index(state_x)][states_y.index(state_y)]
-            # logger.info(f"Action: {action_index}")
+
+            logger.info(f"Action: {action_index}, move: {actions[action_index]}")
             obsv, reward, loop_closed, info = env.step(actions[action_index])
-            next_x, next_y = round(obsv[0] * 20) / 20, round(obsv[1] * 20) / 20
+            next_x, next_y = round(obsv[0] * 100) / 100, round(obsv[1] * 100) / 100
             q_table[action_index][states_x.index(state_x)][states_y.index(state_y)] = q_table[action_index][
                 states_x.index(state_x)
             ][states_y.index(state_y)] + alpha * (
@@ -57,7 +71,7 @@ if __name__ == "__main__":
             reward_all += reward
             episode_ended = loop_closed or timestep >= time_to_close_loop
             # logger.info(f"reward: {reward}")
-            logger.info(f"info :{info}")
+            # logger.info(f"info :{info}")
             if episode_ended:
                 logger.info(f"reward : {reward_all}")
 
