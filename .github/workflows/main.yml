@@ -36,7 +36,7 @@ jobs:
     - name: Run flake8
       run: flake8
     - name: Run mypy
-      run: mypy robomaster
+      run: mypy alphabot
     - name: Test with pytest
       run: |
         pytest --suppress-no-test-exit-code
